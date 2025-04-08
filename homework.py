@@ -2,10 +2,23 @@ import requests
 from dotenv import load_dotenv
 from telebot import TeleBot
 
+import logging
 import os
+import sys
 import time
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setLevel(logging.DEBUG)
+
+formatter = logging.Formatter('%(asctime)s %(name)s %(levelname)s %(message)s')
+stream_handler.setFormatter(formatter)
+
+logger.addHandler(stream_handler)
 
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
@@ -31,19 +44,36 @@ def check_tokens():
 
 def send_message(bot, message):
     bot.send_message(TELEGRAM_CHAT_ID, message)
+    logger.info('Сообщение отправлено!')
 
 
 def get_api_answer(timestamp):
-    return requests.get(ENDPOINT, headers=HEADERS, params={'from_date': {timestamp}})
+    #params = {'from_date': timestamp}
+    params = {'from_date': 1741426384}
+    response = requests.get(ENDPOINT, headers=HEADERS, params=params)
+    response.raise_for_status()
+    return response.json()
 
 
 def check_response(response):
-    pass
+    if 'homeworks' not in response:
+        raise ValueError('Ключ "homeworks" отсутствует в ответе API')
+    return response['homeworks']
 
 def parse_status(homework):
-    pass
+    if 'homework_name' not in homework or 'status' not in homework:
+        raise KeyError(
+            'Ключи "homework_name" или "status" отсутствуют в ответе API')
 
-    #return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    homework_name = homework['homework_name']
+    status = homework['status']
+
+    if status not in HOMEWORK_VERDICTS:
+        raise ValueError(
+            f'Недокументированный статус домашней работы: {status}')
+
+    verdict = HOMEWORK_VERDICTS[status]
+    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def main():
@@ -51,24 +81,25 @@ def main():
 
     check_tokens()
 
-    # Создаем объект класса бота
     bot = TeleBot(token=TELEGRAM_TOKEN)
-    timestamp = int(time.time())
-    #print(HEADERS)
-    homework_statuses = get_api_answer(timestamp)
-    print(homework_statuses)
-
 
     while True:
         try:
+            timestamp = int(time.time())
+            response = get_api_answer(timestamp)
+            homeworks = check_response(response)
 
-            homework_statuses = get_api_answer(timestamp)
-            print(homework_statuses)
+            for homework in homeworks:
+                message = parse_status(homework)
+                send_message(bot, message)
+
+
+            time.sleep(RETRY_PERIOD)
 
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
-        break
-
+            send_message(bot, message)
+            time.sleep(RETRY_PERIOD)
 
 if __name__ == '__main__':
     main()
