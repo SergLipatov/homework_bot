@@ -38,29 +38,45 @@ HOMEWORK_VERDICTS = {
 
 
 def check_tokens():
-    if not PRACTICUM_TOKEN or not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        raise Exception('Отсутствуют обязательные переменные окружения.')
+    """Функция проверяет доступность переменных содержащих токены."""
+    required_tokens = {
+        'PRACTICUM_TOKEN': PRACTICUM_TOKEN,
+        'TELEGRAM_TOKEN': TELEGRAM_TOKEN,
+        'TELEGRAM_CHAT_ID': TELEGRAM_CHAT_ID,
+    }
+
+    for name, value in required_tokens.items():
+        if not value:
+            logger.critical(f'Отсутствует обязательная переменная окружения: {name}')
+            raise Exception(f'Отсутствует переменная окружения: {name}')
 
 
 def send_message(bot, message):
-    bot.send_message(TELEGRAM_CHAT_ID, message)
-    logger.info('Сообщение отправлено!')
+    """Функция отправляет сообщение в телеграмм-чат."""
+    try:
+        bot.send_message(TELEGRAM_CHAT_ID, message)
+        logger.debug('Сообщение отправлено!')
+    except Exception as err:
+        logger.error(f'Ошибка отправки сообщения: {err}')
 
 
 def get_api_answer(timestamp):
+    """Функция выполняет запрос к API."""
     #params = {'from_date': timestamp}
-    params = {'from_date': 1741426384}
+    params = {'from_date': timestamp}
     response = requests.get(ENDPOINT, headers=HEADERS, params=params)
     response.raise_for_status()
     return response.json()
 
 
 def check_response(response):
+    """Функция проверяет ответ от API на корректность."""
     if 'homeworks' not in response:
         raise ValueError('Ключ "homeworks" отсутствует в ответе API')
     return response['homeworks']
 
 def parse_status(homework):
+    """Функция извлекает статус работы из ответа от API."""
     if 'homework_name' not in homework or 'status' not in homework:
         raise KeyError(
             'Ключи "homework_name" или "status" отсутствуют в ответе API')
