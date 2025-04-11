@@ -104,6 +104,46 @@ def parse_status(homework):
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
+def process_homeworks(bot, homeworks, prev_statuses):
+    """Обработка новых статусов домашних работ и отправка уведомлений."""
+    for homework in homeworks:
+        hw_key = (f"{homework.get('homework_name', 'unknown')}_"
+                  f"{homework.get('status', 'unknown')}")
+        if hw_key not in prev_statuses:
+            message = parse_status(homework)
+            if send_message(bot, message):
+                prev_statuses[hw_key] = True
+    return prev_statuses
+
+
+def poll_api_with_backoff(bot, timestamp, prev_statuses, error_reported):
+    """Опрос API и обработка ответа с обработкой ошибок."""
+    try:
+        if error_reported:
+            success_msg = 'Работа программы восстановлена'
+            send_message(bot, success_msg)
+            logger.info(success_msg)
+            error_reported = False
+
+        response = get_api_answer(timestamp)
+        homeworks = check_response(response)
+        new_timestamp = response.get('current_date', int(time.time()))
+
+        if homeworks:
+            prev_statuses = process_homeworks(bot, homeworks, prev_statuses)
+        else:
+            logger.debug('Нет новых статусов домашних работ')
+
+        return new_timestamp, prev_statuses, error_reported
+    except Exception as error:
+        error_msg = f'Сбой в работе программы: {error}'
+        logger.error(error_msg)
+        if not error_reported and bot:
+            send_message(bot, error_msg)
+            error_reported = True
+        return timestamp, prev_statuses, error_reported
+
+
 def main():
     """Основная логика работы бота."""
     try:
@@ -111,37 +151,16 @@ def main():
     except Exception as error:
         logger.critical(f'Программа остановлена: {error}')
         sys.exit(1)
+
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     prev_statuses = {}
     error_reported = False
+
     while True:
-        try:
-            if error_reported:
-                success_msg = 'Работа программы восстановлена'
-                send_message(bot, success_msg)
-                logger.info(success_msg)
-                error_reported = False
-            response = get_api_answer(timestamp)
-            homeworks = check_response(response)
-            timestamp = response.get('current_date', int(time.time()))
-            if not homeworks:
-                logger.debug('Нет новых статусов домашних работ')
-                time.sleep(RETRY_PERIOD)
-                continue
-            for homework in homeworks:
-                hw_key = (f"{homework.get('homework_name', 'unknown')}_"
-                          f"{homework.get('status', 'unknown')}")
-                if hw_key not in prev_statuses:
-                    message = parse_status(homework)
-                    if send_message(bot, message):
-                        prev_statuses[hw_key] = True
-        except Exception as error:
-            error_msg = f'Сбой в работе программы: {error}'
-            logger.error(error_msg)
-            if not error_reported and bot:
-                send_message(bot, error_msg)
-                error_reported = True
+        timestamp, prev_statuses, error_reported = poll_api_with_backoff(
+            bot, timestamp, prev_statuses, error_reported
+        )
         time.sleep(RETRY_PERIOD)
 
 
