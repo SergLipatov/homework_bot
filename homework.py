@@ -75,6 +75,7 @@ UNEXPECTED_ERROR = 'Непредвиденная ошибка: {error}'
 
 class APIError(Exception):
     """Исключение, вызываемое при ошибках в ответе API."""
+
     pass
 
 
