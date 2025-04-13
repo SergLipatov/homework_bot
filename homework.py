@@ -185,162 +185,64 @@ def parse_status(homework):
     )
 
 
+def handle_error(bot, error):
+    """Обрабатывает ошибки и отправляет сообщение о них."""
+    if isinstance(error, requests.exceptions.ConnectionError):
+        error_msg = CONNECTION_ERROR.format(error=error)
+    elif isinstance(error, requests.exceptions.Timeout):
+        error_msg = TIMEOUT_ERROR.format(error=error)
+    elif isinstance(error, requests.exceptions.HTTPError):
+        error_msg = HTTP_ERROR.format(error=error)
+    elif isinstance(error, APIError):
+        error_msg = API_RESPONSE_ERROR.format(error=error)
+    elif isinstance(error, KeyError):
+        error_msg = KEY_ACCESS_ERROR.format(error=error)
+    elif isinstance(error, TypeError):
+        error_msg = TYPE_ERROR.format(error=error)
+    else:
+        error_msg = UNEXPECTED_ERROR.format(error=error)
+    logger.error(error_msg)
+    send_message(bot, error_msg)
+
+
 def main():
     """Основная логика работы бота."""
     check_tokens()
-
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    # timestamp = 0
 
     while True:
         try:
             response = get_api_answer(timestamp)
             homeworks = check_response(response)
             new_timestamp = response.get('current_date')
+
             if new_timestamp is None:
                 logger.error(MISSING_CURRENT_DATE)
-                time.sleep(RETRY_PERIOD)
                 continue
-            if homeworks:
-                homework = homeworks[0]
-                message = parse_status(homework)
-                if send_message(bot, message):
-                    logger.info(
-                        NEW_STATUS_PROCESSED.format(
-                            homework_name=homework.get("homework_name")
-                        )
-                    )
-                    timestamp = new_timestamp
-                else:
-                    logger.error(SEND_ERROR_TIMESTAMP)
-            else:
+
+            if not homeworks:
                 logger.debug(NO_NEW_HOMEWORK_STATUSES)
                 timestamp = new_timestamp
-        except requests.exceptions.ConnectionError as error:
-            error_msg = CONNECTION_ERROR.format(error=error)
-            logger.error(error_msg)
-            send_message(bot, error_msg)
-        except requests.exceptions.Timeout as error:
-            error_msg = TIMEOUT_ERROR.format(error=error)
-            logger.error(error_msg)
-            send_message(bot, error_msg)
-        except requests.exceptions.HTTPError as error:
-            error_msg = HTTP_ERROR.format(error=error)
-            logger.error(error_msg)
-            send_message(bot, error_msg)
-        except APIError as error:
-            error_msg = API_RESPONSE_ERROR.format(error=error)
-            logger.error(error_msg)
-            send_message(bot, error_msg)
-        except KeyError as error:
-            error_msg = KEY_ACCESS_ERROR.format(error=error)
-            logger.error(error_msg)
-            send_message(bot, error_msg)
-        except TypeError as error:
-            error_msg = TYPE_ERROR.format(error=error)
-            logger.error(error_msg)
-            send_message(bot, error_msg)
-        except Exception as error:
-            error_msg = UNEXPECTED_ERROR.format(error=error)
-            logger.error(error_msg)
-            send_message(bot, error_msg)
+                continue
 
-        time.sleep(RETRY_PERIOD)
+            homework = homeworks[0]
+            message = parse_status(homework)
+
+            if send_message(bot, message):
+                logger.info(NEW_STATUS_PROCESSED.format(
+                    homework_name=homework.get("homework_name")
+                ))
+                timestamp = new_timestamp
+            else:
+                logger.error(SEND_ERROR_TIMESTAMP)
+
+        except Exception as error:
+            handle_error(bot, error)
+
+        finally:
+            time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
-    # from unittest import TestCase, mock, main as uni_main
     main()
-
-    # class TestHomeworkBot(TestCase):
-    #     @mock.patch('requests.get')
-    #     def test_connection_error(self, mock_get):
-    #         mock_get.side_effect = requests.exceptions.ConnectionError(
-    #             "Сеть недоступна")
-    #         main()
-
-    #     @mock.patch('requests.get')
-    #     def test_api_error_response(self, mock_get):
-    #         mock_response = mock.Mock()
-    #         mock_response.status_code = 200
-    #         mock_response.json.return_value = {
-    #             'error': 'Внутренняя ошибка сервера'}
-    #         mock_get.return_value = mock_response
-    #         main()
-    #
-    #     @mock.patch('requests.get')
-    #     def test_unexpected_status_code(self, mock_get):
-    #         mock_response = mock.Mock()
-    #         mock_response.status_code = 500
-    #         mock_get.return_value = mock_response
-    #         main()
-    #
-    #     @mock.patch('requests.get')
-    #     def test_unknown_homework_status(self, mock_get):
-    #         mock_response = mock.Mock()
-    #         mock_response.status_code = 200
-    #         mock_response.json.return_value = {
-    #             'homeworks': [
-    #                 {
-    #                     'homework_name': 'тестовая_домашка',
-    #                     'status': 'неизвестный_статус'
-    #                 }
-    #             ],
-    #             'current_date': 1234567890
-    #         }
-    #         mock_get.return_value = mock_response
-    #         main()
-    #
-    #     @mock.patch('requests.get')
-    #     def test_malformed_json_response(self, mock_get):
-    #         mock_response = mock.Mock()
-    #         mock_response.status_code = 200
-    #         mock_response.json.return_value = {
-    #             'homeworks': "Это должен быть список, а не строка",
-    #             'current_date': 1234567890
-    #         }
-    #         mock_get.return_value = mock_response
-    #         main()
-    #
-    #
-    #     @mock.patch('requests.get')
-    #     def test_missing_homework_name(self, mock_get):
-    #         mock_response = mock.Mock()
-    #         mock_response.status_code = 200
-    #         mock_response.json.return_value = {
-    #             'homeworks': [
-    #                 {
-    #                     'status': 'approved'  # Отсутствует поле
-    #                       '                   # homework_name
-    #                 }
-    #             ],
-    #             'current_date': 1234567890
-    #         }
-    #         mock_get.return_value = mock_response
-    #         main()
-
-    #
-    #
-    #     @mock.patch('requests.get')
-    #     def test_missing_current_date(self, mock_get):
-    #         mock_response = mock.Mock()
-    #         mock_response.status_code = 200
-    #         mock_response.json.return_value = {
-    #             'homeworks': [
-    #                 {
-    #                     'homework_name': 'тестовая_домашка',
-    #                     'status': 'approved'
-    #                 }
-    #             ]
-    #         }
-    #         mock_get.return_value = mock_response
-    #         main()
-    #
-    #
-    #     @mock.patch('requests.get')
-    #     def test_timeout_error(self, mock_get):
-    #         mock_get.side_effect = requests.exceptions.Timeout(
-    #             "Превышено время ожидания")
-    #         main()
-    # uni_main()
