@@ -63,7 +63,7 @@ TYPE_ERROR = 'Ошибка типа данных: {error}'
 UNEXPECTED_ERROR = 'Непредвиденная ошибка: {error}'
 
 ERROR_TYPES = {
-    requests.exceptions.ConnectionError: CONNECTION_ERROR,
+    requests.RequestException: CONNECTION_ERROR,
     requests.exceptions.Timeout: TIMEOUT_ERROR,
     requests.exceptions.HTTPError: HTTP_ERROR,
     ValueError: API_RESPONSE_ERROR,
@@ -102,7 +102,7 @@ def get_api_answer(timestamp):
     try:
         response = requests.get(ENDPOINT, headers=HEADERS, params=params)
     except requests.RequestException as err:
-        raise requests.exceptions.ConnectionError(API_REQUEST_ERROR.format(
+        raise requests.RequestException(API_REQUEST_ERROR.format(
             error=err,
             endpoint=ENDPOINT,
             params=params,
@@ -110,7 +110,7 @@ def get_api_answer(timestamp):
         ))
 
     if response.status_code != HTTPStatus.OK:
-        raise requests.exceptions.ConnectionError(
+        raise requests.RequestException(
             API_ENDPOINT_UNAVAILABLE.format(
                 endpoint=ENDPOINT,
                 status_code=response.status_code,
