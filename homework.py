@@ -7,24 +7,14 @@ from http import HTTPStatus
 from dotenv import load_dotenv
 from telebot import TeleBot
 import requests
-from requests.exceptions import HTTPError
 
 load_dotenv()
-log_file = __file__ + '.log'
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s %(name)s [%(filename)s:%(lineno)d in %(funcName)s] '
-           '%(levelname)s: %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(log_file, encoding='utf-8')
-    ]
-)
 logger = logging.getLogger(__name__)
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+TOKENS = ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
@@ -72,18 +62,19 @@ KEY_ACCESS_ERROR = 'Ошибка доступа к ключу в данных: {
 TYPE_ERROR = 'Ошибка типа данных: {error}'
 UNEXPECTED_ERROR = 'Непредвиденная ошибка: {error}'
 
-
-class APIError(Exception):
-    """Исключение, вызываемое при ошибках в ответе API."""
-
-    pass
+ERROR_TYPES = {
+    requests.exceptions.ConnectionError: CONNECTION_ERROR,
+    requests.exceptions.Timeout: TIMEOUT_ERROR,
+    requests.exceptions.HTTPError: HTTP_ERROR,
+    ValueError: API_RESPONSE_ERROR,
+    KeyError: KEY_ACCESS_ERROR,
+    TypeError: TYPE_ERROR
+}
 
 
 def check_tokens():
     """Проверяет доступность необходимых переменных окружения."""
-    missing_tokens = [name for name in [
-        'PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID'
-    ] if not globals()[name]]
+    missing_tokens = [name for name in TOKENS if not globals()[name]]
 
     if missing_tokens:
         error_message = MISSING_ENV_VARS.format(missing_vars=missing_tokens)
@@ -110,48 +101,50 @@ def get_api_answer(timestamp):
     params = {'from_date': timestamp}
     try:
         response = requests.get(ENDPOINT, headers=HEADERS, params=params)
+    except requests.RequestException as err:
+        raise requests.exceptions.ConnectionError(API_REQUEST_ERROR.format(
+            error=err,
+            endpoint=ENDPOINT,
+            params=params,
+            headers=HEADERS
+        ))
 
-        if response.status_code != HTTPStatus.OK:
-            error_msg = API_ENDPOINT_UNAVAILABLE.format(
+    if response.status_code != HTTPStatus.OK:
+        raise requests.exceptions.ConnectionError(
+            API_ENDPOINT_UNAVAILABLE.format(
                 endpoint=ENDPOINT,
                 status_code=response.status_code,
                 params=params,
                 headers=HEADERS
             )
-            raise HTTPError(error_msg)
+        )
 
+    try:
         json_response = response.json()
-
-        if 'code' in json_response or 'error' in json_response:
-            error_info = json_response.get('code') or json_response.get(
-                'error')
-            error_msg = API_ERROR_RESPONSE.format(
-                error_info=error_info,
-                endpoint=ENDPOINT,
-                params=params,
-                headers=HEADERS
-            )
-            raise APIError(error_msg)
-
-        return json_response
-
-    except requests.RequestException as err:
-        error_msg = API_REQUEST_ERROR.format(
-            error=err,
-            endpoint=ENDPOINT,
-            params=params,
-            headers=HEADERS
-        )
-        raise APIError(error_msg)
-
     except ValueError as err:
-        error_msg = JSON_DECODE_ERROR.format(
+        raise ValueError(JSON_DECODE_ERROR.format(
             error=err,
             endpoint=ENDPOINT,
             params=params,
             headers=HEADERS
-        )
-        raise ValueError(error_msg)
+        ))
+
+    found_errors_keys = {}
+    for key in ['code', 'error']:
+        if key in json_response:
+            found_errors_keys[key] = json_response.get(key)
+    if found_errors_keys:
+        error_info = ", ".join(
+            [f"'{key}': {value}" for key, value in
+             found_errors_keys.items()])
+        raise ValueError(API_ERROR_RESPONSE.format(
+            error_info=error_info,
+            endpoint=ENDPOINT,
+            params=params,
+            headers=HEADERS
+        ))
+
+    return json_response
 
 
 def check_response(response):
@@ -172,7 +165,7 @@ def check_response(response):
 
 def parse_status(homework):
     """Извлекает и возвращает статус работы из информации о домашней работе."""
-    required_keys = ('homework_name', 'status')
+    required_keys = ('homework_name', 'status', 'current_date')
     for key in required_keys:
         if key not in homework:
             raise KeyError(MISSING_KEY_ERROR.format(key=key))
@@ -185,64 +178,51 @@ def parse_status(homework):
     )
 
 
-def handle_error(bot, error):
-    """Обрабатывает ошибки и отправляет сообщение о них."""
-    if isinstance(error, requests.exceptions.ConnectionError):
-        error_msg = CONNECTION_ERROR.format(error=error)
-    elif isinstance(error, requests.exceptions.Timeout):
-        error_msg = TIMEOUT_ERROR.format(error=error)
-    elif isinstance(error, requests.exceptions.HTTPError):
-        error_msg = HTTP_ERROR.format(error=error)
-    elif isinstance(error, APIError):
-        error_msg = API_RESPONSE_ERROR.format(error=error)
-    elif isinstance(error, KeyError):
-        error_msg = KEY_ACCESS_ERROR.format(error=error)
-    elif isinstance(error, TypeError):
-        error_msg = TYPE_ERROR.format(error=error)
-    else:
-        error_msg = UNEXPECTED_ERROR.format(error=error)
-    logger.error(error_msg)
-    send_message(bot, error_msg)
-
-
 def main():
     """Основная логика работы бота."""
     check_tokens()
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
+    last_error_message = None
 
     while True:
         try:
             response = get_api_answer(timestamp)
             homeworks = check_response(response)
-            new_timestamp = response.get('current_date')
-
-            if new_timestamp is None:
-                logger.error(MISSING_CURRENT_DATE)
-                continue
-
-            if not homeworks:
-                logger.debug(NO_NEW_HOMEWORK_STATUSES)
-                timestamp = new_timestamp
-                continue
-
-            homework = homeworks[0]
-            message = parse_status(homework)
-
-            if send_message(bot, message):
+            new_timestamp = response.get('current_date', timestamp)
+            message = parse_status(homeworks[0]) if homeworks else None
+            if message and send_message(bot, message):
                 logger.info(NEW_STATUS_PROCESSED.format(
-                    homework_name=homework.get("homework_name")
+                    homework_name=homeworks[0]['homework_name']
                 ))
                 timestamp = new_timestamp
-            else:
+            elif message:
                 logger.error(SEND_ERROR_TIMESTAMP)
-
+            else:
+                logger.debug(NO_NEW_HOMEWORK_STATUSES)
+            last_error_message = None
         except Exception as error:
-            handle_error(bot, error)
-
-        finally:
-            time.sleep(RETRY_PERIOD)
+            for error_type, message_template in ERROR_TYPES.items():
+                if isinstance(error, error_type):
+                    error_message = message_template.format(error=error)
+                    break
+            else:
+                error_message = UNEXPECTED_ERROR.format(error=error)
+            logger.error(error_message)
+            if error_message != last_error_message:
+                send_message(bot, error_message)
+                last_error_message = error_message
+        time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s %(name)s [%(filename)s:%(lineno)d in '
+               '%(funcName)s] %(levelname)s: %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(f'{__file__}.log', encoding='utf-8')
+        ]
+    )
     main()
