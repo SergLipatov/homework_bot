@@ -63,7 +63,7 @@ TYPE_ERROR = 'Ошибка типа данных: {error}'
 UNEXPECTED_ERROR = 'Непредвиденная ошибка: {error}'
 
 ERROR_TYPES = {
-    requests.RequestException: CONNECTION_ERROR,
+    ConnectionError: CONNECTION_ERROR,
     requests.exceptions.Timeout: TIMEOUT_ERROR,
     requests.exceptions.HTTPError: HTTP_ERROR,
     ValueError: API_RESPONSE_ERROR,
@@ -102,7 +102,7 @@ def get_api_answer(timestamp):
     try:
         response = requests.get(ENDPOINT, headers=HEADERS, params=params)
     except requests.RequestException as err:
-        raise requests.RequestException(API_REQUEST_ERROR.format(
+        raise ConnectionError(API_REQUEST_ERROR.format(
             error=err,
             endpoint=ENDPOINT,
             params=params,
@@ -110,7 +110,7 @@ def get_api_answer(timestamp):
         ))
 
     if response.status_code != HTTPStatus.OK:
-        raise requests.RequestException(
+        raise requests.exceptions.HTTPError(
             API_ENDPOINT_UNAVAILABLE.format(
                 endpoint=ENDPOINT,
                 status_code=response.status_code,
@@ -155,6 +155,8 @@ def check_response(response):
         )
     if 'homeworks' not in response:
         raise KeyError(MISSING_HOMEWORKS_KEY)
+    if 'current_date' not in response:
+        raise KeyError(MISSING_CURRENT_DATE)
     homeworks = response['homeworks']
     if not isinstance(homeworks, list):
         raise TypeError(
@@ -165,7 +167,7 @@ def check_response(response):
 
 def parse_status(homework):
     """Извлекает и возвращает статус работы из информации о домашней работе."""
-    required_keys = ('homework_name', 'status', 'current_date')
+    required_keys = ('homework_name', 'status')
     for key in required_keys:
         if key not in homework:
             raise KeyError(MISSING_KEY_ERROR.format(key=key))
