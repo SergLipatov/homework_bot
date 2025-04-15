@@ -1,3 +1,4 @@
+import copy
 import logging
 import os
 import sys
@@ -41,35 +42,20 @@ API_ERROR_RESPONSE = (
 API_REQUEST_ERROR = (
     'Ошибка при запросе к API: {error}. '
     'Эндпоинт: {endpoint}, параметры: {params}, заголовки: {headers}')
-JSON_DECODE_ERROR = (
-    'Ошибка декодирования JSON: {error}. '
-    'Эндпоинт: {endpoint}, параметры: {params}, заголовки: {headers}')
 API_RESPONSE_TYPE_ERROR = 'Ответ API должен быть словарем, получен {type_name}'
 MISSING_HOMEWORKS_KEY = 'В ответе API отсутствует ключ "homeworks"'
 HOMEWORKS_TYPE_ERROR = (
     'Значение ключа "homeworks" должно быть списком, получен {type_name}')
 MISSING_KEY_ERROR = 'В ответе API отсутствует ключ "{key}"'
 UNKNOWN_STATUS_ERROR = 'Неизвестный статус работы: {status}'
-MISSING_CURRENT_DATE = 'API не вернул "current_date" в ответе'
-NEW_STATUS_PROCESSED = 'Обработан новый статус для работы "{homework_name}"'
-SEND_ERROR_TIMESTAMP = 'Не удалось отправить сообщение, timestamp не обновлен'
 NO_NEW_HOMEWORK_STATUSES = 'Нет новых статусов домашних работ'
-CONNECTION_ERROR = 'Ошибка соединения при запросе к API: {error}'
-TIMEOUT_ERROR = 'Превышено время ожидания ответа API: {error}'
-HTTP_ERROR = 'HTTP-ошибка при запросе к API: {error}'
-API_RESPONSE_ERROR = 'Ошибка в ответе API: {error}'
-KEY_ACCESS_ERROR = 'Ошибка доступа к ключу в данных: {error}'
-TYPE_ERROR = 'Ошибка типа данных: {error}'
-UNEXPECTED_ERROR = 'Непредвиденная ошибка: {error}'
+PROGRAM_ERROR = 'Сбой в работе программы: {error}'
 
-ERROR_TYPES = {
-    ConnectionError: CONNECTION_ERROR,
-    requests.exceptions.Timeout: TIMEOUT_ERROR,
-    requests.exceptions.HTTPError: HTTP_ERROR,
-    ValueError: API_RESPONSE_ERROR,
-    KeyError: KEY_ACCESS_ERROR,
-    TypeError: TYPE_ERROR
-}
+BASIC_REQUEST_PARAMS = dict(
+    url=ENDPOINT,
+    headers=HEADERS,
+    params={'from_date': None}
+)
 
 
 def check_tokens():
@@ -98,52 +84,30 @@ def send_message(bot, message):
 
 def get_api_answer(timestamp):
     """Выполняет запрос к API сервиса."""
-    params = {'from_date': timestamp}
+    request_params = copy.deepcopy(BASIC_REQUEST_PARAMS)
+    request_params['params']['from_date'] = timestamp
     try:
-        response = requests.get(ENDPOINT, headers=HEADERS, params=params)
+        response = requests.get(**request_params)
     except requests.RequestException as err:
         raise ConnectionError(API_REQUEST_ERROR.format(
             error=err,
-            endpoint=ENDPOINT,
-            params=params,
-            headers=HEADERS
+            **request_params
         ))
 
     if response.status_code != HTTPStatus.OK:
-        raise requests.exceptions.HTTPError(
+        raise ConnectionError(
             API_ENDPOINT_UNAVAILABLE.format(
-                endpoint=ENDPOINT,
                 status_code=response.status_code,
-                params=params,
-                headers=HEADERS
+                **request_params
             )
         )
-
-    try:
-        json_response = response.json()
-    except ValueError as err:
-        raise ValueError(JSON_DECODE_ERROR.format(
-            error=err,
-            endpoint=ENDPOINT,
-            params=params,
-            headers=HEADERS
-        ))
-
-    found_errors_keys = {}
+    json_response = response.json()
     for key in ['code', 'error']:
         if key in json_response:
-            found_errors_keys[key] = json_response.get(key)
-    if found_errors_keys:
-        error_info = ", ".join(
-            [f"'{key}': {value}" for key, value in
-             found_errors_keys.items()])
-        raise ValueError(API_ERROR_RESPONSE.format(
-            error_info=error_info,
-            endpoint=ENDPOINT,
-            params=params,
-            headers=HEADERS
-        ))
-
+            raise RuntimeError(API_ERROR_RESPONSE.format(
+                code=key,
+                **request_params
+            ))
     return json_response
 
 
@@ -155,8 +119,6 @@ def check_response(response):
         )
     if 'homeworks' not in response:
         raise KeyError(MISSING_HOMEWORKS_KEY)
-    if 'current_date' not in response:
-        raise KeyError(MISSING_CURRENT_DATE)
     homeworks = response['homeworks']
     if not isinstance(homeworks, list):
         raise TypeError(
@@ -167,8 +129,7 @@ def check_response(response):
 
 def parse_status(homework):
     """Извлекает и возвращает статус работы из информации о домашней работе."""
-    required_keys = ('homework_name', 'status')
-    for key in required_keys:
+    for key in ('homework_name', 'status'):
         if key not in homework:
             raise KeyError(MISSING_KEY_ERROR.format(key=key))
     status = homework['status']
@@ -191,30 +152,20 @@ def main():
         try:
             response = get_api_answer(timestamp)
             homeworks = check_response(response)
-            new_timestamp = response.get('current_date', timestamp)
-            message = parse_status(homeworks[0]) if homeworks else None
-            if message and send_message(bot, message):
-                logger.info(NEW_STATUS_PROCESSED.format(
-                    homework_name=homeworks[0]['homework_name']
-                ))
-                timestamp = new_timestamp
-            elif message:
-                logger.error(SEND_ERROR_TIMESTAMP)
-            else:
+            if not homeworks:
                 logger.debug(NO_NEW_HOMEWORK_STATUSES)
-            last_error_message = None
+                continue
+            if send_message(bot, parse_status(homeworks[0])):
+                timestamp = response.get('current_date', timestamp)
+                last_error_message = None
         except Exception as error:
-            for error_type, message_template in ERROR_TYPES.items():
-                if isinstance(error, error_type):
-                    error_message = message_template.format(error=error)
-                    break
-            else:
-                error_message = UNEXPECTED_ERROR.format(error=error)
+            error_message = PROGRAM_ERROR.format(error=error)
             logger.error(error_message)
-            if error_message != last_error_message:
-                send_message(bot, error_message)
+            if error_message != last_error_message and send_message(
+                    bot, error_message):
                 last_error_message = error_message
-        time.sleep(RETRY_PERIOD)
+        finally:
+            time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
