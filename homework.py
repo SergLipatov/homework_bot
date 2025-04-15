@@ -106,6 +106,7 @@ def get_api_answer(timestamp):
         if key in json_response:
             raise RuntimeError(API_ERROR_RESPONSE.format(
                 code=key,
+                data=json_response[key],
                 **request_params
             ))
     return json_response
